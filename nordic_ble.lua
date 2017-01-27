@@ -16,18 +16,18 @@ local crc_tfs = {
     }
 local hf_nordic_ble_crcok = ProtoField.bool("nordic_ble.crcok", "CRC", base.None, crc_tfs, 0, "Cyclic Redundancy Check state")
 local direction_tfs = {
-	"Master -> Slave",
-	"Slave -> Master"
+    "Master -> Slave",
+    "Slave -> Master"
     }
 local hf_nordic_ble_direction = ProtoField.bool("nordic_ble.direction", "direction", base.None, direction_tfs, 0, "Direction")
 local encrypted_tfs = {
-	"Yes",
-	"No"
+    "Yes",
+    "No"
     }
 local hf_nordic_ble_encrypted = ProtoField.bool("nordic_ble.encrypted", "encrypted", base.None, encrypted_tfs, 0, "Was the packet encrypted")
 mic_tfs = {
-	"OK",
-	"Incorrect"
+    "OK",
+    "Incorrect"
     }
 local hf_nordic_ble_micok = ProtoField.bool("nordic_ble.micok", "MIC", base.None, mic_tfs, 0, "Message Integrity Check state")
 local hf_nordic_ble_channel = ProtoField.uint8("nordic_ble.channel", "channel", base.DEC, nil, 0, "Channel")
@@ -98,7 +98,7 @@ local BLE_HEADER_LEN                      = 10
 local PROTOVER                            = 1
 
 local US_PER_BYTE                                     = 8
-local NOF_BLE_BYTES_NOT_INCLUDED_IN_BLE_LENGTH        = 10 -- Preamble (1) + AA (4) + Header (1) + Length (1) + CRC (3) 			= 10 Bytes
+local NOF_BLE_BYTES_NOT_INCLUDED_IN_BLE_LENGTH        = 10 -- Preamble (1) + AA (4) + Header (1) + Length (1) + CRC (3)             = 10 Bytes
 local BLE_METADATA_TRANFER_TIME_US                    = US_PER_BYTE * NOF_BLE_BYTES_NOT_INCLUDED_IN_BLE_LENGTH
 
 local UART_HEADER_LENGTH = UART_PACKET_ACCESS_ADDRESS_INDEX
@@ -142,7 +142,7 @@ function dissect_lengths (tvb, pinfo, tree)
         tree:add(hf_nordic_ble_header_length, tvb(UART_PACKET_HEADER_LEN_INDEX, 1))
         item = tree:add(hf_nordic_ble_payload_length, tvb(UART_PACKET_PACKET_LEN_INDEX, 1))
         item:add_expert_info(PI_MALFORMED, PI_ERROR, "UART packet length is too large (likely corrupted).")
-        bad_length 	= true
+        bad_length     = true
     end
 
     return bad_length
@@ -153,29 +153,86 @@ function dissect_protover (tvb, tree)
 end
 
 function dissect_packet_counter (tvb, tree)
-    tree:add(hf_nordic_ble_packet_counter, tvb(UART_PACKET_COUNTER_INDEX, 2))
+    tree:add_le(hf_nordic_ble_packet_counter, tvb(UART_PACKET_COUNTER_INDEX, 2))
 end
 
 function dissect_id (tvb, tree)
+    local id = tvb(UART_PACKET_ID_INDEX, 1):uint()
 end
 
 function dissect_ble_hlen (tvb, tree)
+    local ble_hlen = tvb(UART_PACKET_BLE_HEADER_LEN_INDEX, 1):uint()
 end
 
 function dissect_flags (tvb, pinfo, tree)
-    return false
+    local bad_mic  = false
+    local flags = tvb(UART_PACKET_FLAGS_INDEX, 1):uint()
+    local crcok = bit.band(flags, 1)
+    local dir = bit.band(flags, 2)
+    local encrypted = bit.band(flags, 4)
+    local micok =  bit.band(flags, 8)
+    
+    if dir > 0 then
+        pinfo.cols.src:set("Master")
+        pinfo.cols.dst:set("Slave")
+    else
+        pinfo.cols.src:set("Slave")
+        pinfo.cols.dst:set("Master")
+    end
+
+    local flags_item = tree:add(hf_nordic_ble_flags, tvb(UART_PACKET_FLAGS_INDEX, 1))
+    if encrypted > 0 then -- if encrypted, add MIC status
+        local item  = tree:add_le(hf_nordic_ble_micok, tvb(UART_PACKET_FLAGS_INDEX, 1), micok > 0)
+        if micok == 0 then
+            -- MIC is bad
+            item:add_expert_info(PI_CHECKSUM, PI_WARN, "MIC is bad")
+            item:add_expert_info(PI_UNDECODED, PI_WARN, "Decryption failed (wrong key?)")
+            bad_mic = true
+        end
+    end
+
+    tree:add_le(hf_nordic_ble_encrypted, tvb(UART_PACKET_FLAGS_INDEX, 1), encrypted > 0)
+    tree:add_le(hf_nordic_ble_direction, tvb(UART_PACKET_FLAGS_INDEX, 1), dir > 0)
+    local item = tree:add_le(hf_nordic_ble_crcok, tvb(UART_PACKET_FLAGS_INDEX, 1), crcok > 0)
+    local bad_crc = false
+    if crcok == 0 then
+        -- CRC is bad
+        item:add_expert_info(PI_MALFORMED, PI_ERROR, "CRC is bad")
+        bad_crc = true
+    end
+
+    return bad_mic
 end
 
 function dissect_channel (tvb, tree)
+    tree:add(hf_nordic_ble_channel, tvb(UART_PACKET_CHANNEL_INDEX, 1))
 end
 
 function dissect_rssi (tvb, tree)
+    local rssi = (-1)*(tvb(UART_PACKET_RSSI_INDEX, 1):uint())
+    tree:add(hf_nordic_ble_rssi, tvb(UART_PACKET_RSSI_INDEX, 1), rssi)
 end
 
 function dissect_event_counter (tvb, tree)
+    local adv_aa = 0x8e89bed6
+    local aa = tvb(UART_HEADER_LENGTH, 4):le_uint()
+    if aa ~= adv_aa then
+        tree:add_le(hf_nordic_ble_event_counter, tvb(UART_PACKET_EVENT_COUNTER_INDEX, 2))
+    end
 end
 
+local previous_ble_packet_length = 0
+
 function dissect_ble_delta_time (tvb, tree)
+    -- end - start
+    local delta_time = tvb(UART_PACKET_TIMESTAMP_INDEX, 4):le_uint()
+    tree:add_le(hf_nordic_ble_delta_time, tvb(UART_PACKET_TIMESTAMP_INDEX, 4))
+
+    -- start - start
+    local delta_time_ss = BLE_METADATA_TRANFER_TIME_US + (US_PER_BYTE * previous_ble_packet_length) + delta_time
+    tree:add(hf_nordic_ble_delta_time_ss, tvb(UART_PACKET_TIMESTAMP_INDEX, 4), delta_time_ss)
+
+    previous_ble_packet_length = tvb(UART_PACKET_PACKET_LEN_INDEX, 1):uint()
 end
 
 function dissect_header_1_0_0 (tvb, pinfo, tree)
@@ -220,7 +277,7 @@ function p_nordic_ble.dissector (tvb, pinfo, tree)
 
     return UART_HEADER_LENGTH + BOARD_ID_LENGTH
 end
- 
+
 -- Initialization routine
 function p_nordic_ble.init()
 end
