@@ -1,5 +1,5 @@
 -- create nordic_ble protocol dissector and its fields
-p_nordic_ble = Proto ("nordic_ble","nordic_ble")
+p_nordic_ble = Proto ("nordic_ble", "Nordic BLE sniffer meta")
 
 local hf_nordic_ble_sync_word = ProtoField.uint16("nordic_ble.sync_word", "Sync word. Always 0xBEEF.", base.HEX)
 local hf_nordic_ble_board_id = ProtoField.uint8("nordic_ble.board_id", "board", base.DEC)
