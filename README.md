@@ -1,4 +1,4 @@
-# Nordic nRF BLE Sniffer Wireshark Dissector in Lua
+# Wireshark Dissector in Lua for Nordic nRF BLE Sniffer
 
 This is a Lua port of Nordic's native dissector for the nRF BLE Sniffer. Legacy header (version 0.9.7) and call to `nordic_debug` dissector have not been ported. Submit a pull request if you port that portion of code.
 
